@@ -36,16 +36,22 @@ class Trainer:
         self.parameters_to_train = []
         self.device = torch.device("cpu" if self.opt.no_cuda else "cuda")
         self.num_scales = len(self.opt.scales)
+        # 由frame ids的长度来判断输入的帧数
         self.num_input_frames = len(self.opt.frame_ids)
+        # 位姿个数与帧数相同
         self.num_pose_frames = self.num_input_frames
-
+        '''
+            这里的frame_ids实际上是一些参数，例如0代表当前输入的图片，如果是[0,-1,1]，则是代表当前帧，前一帧和后一帧。
+            后面加入的“s”参数则表示采用stereo training（图像对训练）。
+            opt参数主要由训练时终端输入
+        '''
         assert self.opt.frame_ids[0] == 0, "frame_ids must start with 0"
-
+        # 只有当使用当前帧以及图像对时不需要posenet
         self.use_pose_net = not (self.opt.use_stereo and self.opt.frame_ids == [0])
 
         if self.opt.use_stereo:
             self.opt.frame_ids.append("s")
-
+        # 使用resnet作为基础模型encoder，depth decoder作为decoder
         self.models["encoder"] = networks.ResnetEncoder(
             self.opt.num_layers, self.opt.weights_init == "pretrained")
         self.models["encoder"].to(self.device)
@@ -55,8 +61,8 @@ class Trainer:
             self.models["encoder"].num_ch_enc, self.opt.scales)
         self.models["depth"].to(self.device)
         self.parameters_to_train += list(self.models["depth"].parameters())
-
-        # Download pretrained weights from DPT (https://github.com/isl-org/DPT) and put them under './weights/'  
+        # 加载专家训练网络DPT。！！！！此处需要修改，加载不同的模型需要修改不同模型的代码
+        # Download pretrained weights from DPT (https://github.com/isl-org/DPT) and put them under './weights/'
         self.mono_model = DPTDepthModel(
             #path='./weights/dpt_hybrid-midas-501f0c75.pt', # general purpose
             path='./weights/dpt_hybrid_nyu-2ce69ec7.pt',  # indoor
@@ -77,8 +83,8 @@ class Trainer:
         # )
         self.mono_model.requires_grad=False
         self.mono_model.to(self.device)
-
-        # By default, we use a standalone ResNet50 as PoseNet. 
+        # pose估计网络默认为resnet50。！！！！此处看情况，是否需要更换不同的pose net。更换则需要更改
+        # By default, we use a standalone ResNet50 as PoseNet.
         if self.use_pose_net:
             self.models["pose_encoder"] = networks.ResnetEncoder(
                 50, # revise this number if you use a different ResNet backbone
@@ -95,7 +101,7 @@ class Trainer:
 
             self.models["pose"].to(self.device)
             self.parameters_to_train += list(self.models["pose"].parameters())
-
+        # 网络基本参数。！！！！此处需要更改，根据不同的网络更改训练参数
         self.model_optimizer = optim.AdamW(self.parameters_to_train, self.opt.learning_rate) #optim.AdamW(self.parameters_to_train, self.opt.learning_rate)
         self.model_lr_scheduler = optim.lr_scheduler.StepLR(
             self.model_optimizer, self.opt.scheduler_step_size, 0.1)
@@ -106,7 +112,7 @@ class Trainer:
         print("Training model named:\n  ", self.opt.model_name)
         print("Models and tensorboard events files are saved to:\n  ", self.opt.log_dir)
         print("Training is using:\n  ", self.device)
-
+        # ！！！！此处的数据集dict需要增加我们本身的数据集
         # data
         datasets_dict = {
                          "SimSIN": datasets.SimSINDataset,
@@ -114,7 +120,7 @@ class Trainer:
                          "NYUv2": datasets.NYUv2Dataset,
                          "UniSIN": datasets.UniSINDataset,}
         self.dataset = datasets_dict[self.opt.dataset]
-
+        # 该参数为数据集的flag参数。！！！！此处也可能需要加入自身数据集
         #self.approx_factor = 1.0
         # set to 1.0: using default SimSIN. VA's alignment is approximately 2x for depth trained on SimSIN
         if self.opt.dataset == 'SimSIN':
@@ -128,6 +134,8 @@ class Trainer:
         fpath = os.path.join(self.opt.data_path,  "{}.txt")
 
         # The below is sample code for training on VA and Replica
+        # 包括训练集和验证集
+        # ！！！！此处的数据集选项需要增加本身数据集选项
         if self.opt.dataset == 'VA':
             train_filenames = readlines(fpath.format("VA_all"))
             val_filenames = readlines(fpath.format("VA_left_all"))
@@ -139,10 +147,10 @@ class Trainer:
         # define train/val file list for SimSIN or UniSIN in the under. DOWNLOAD the data in the project page
         # train_filenames = readlines(fpath.format("all_large_release2")) # readlines(fpath.format("UniSIN_500_list"))
         # val_filenames = readlines(fpath.format("replica_test_sub")
-
+        # 训练总的步数，epoch是整个数据集的轮数
         num_train_samples = len(train_filenames)
         self.num_total_steps = num_train_samples // self.opt.batch_size * self.opt.num_epochs
-
+        # 训练初始化操作，包括数据集，数据集的训练参数；以及验证集
         train_dataset = self.dataset(
             self.opt.data_path, train_filenames, self.opt.height, self.opt.width,
             self.opt.frame_ids, 4, is_train=True)
@@ -156,13 +164,13 @@ class Trainer:
             val_dataset, self.opt.batch_size, False,
             num_workers=self.opt.num_workers, pin_memory=True, drop_last=True)
         self.val_iter = iter(self.val_loader)
-
+        # ！！！开始的huberloss等等为什么，不是很理解
         self.ssim = SSIM()
         self.ssim.to(self.device)
         self.depth_criterion = nn.HuberLoss(delta=0.8)
         self.SOFT = nn.Softsign()
         self.ABSSIGN = torch.sign
-
+        # 将深度图转化成point cloud
         self.backproject_depth = {}
         self.project_3d = {}
         for scale in self.opt.scales:
@@ -197,7 +205,7 @@ class Trainer:
         self.epoch = 0
         self.step = 0
         self.start_time = time.time()
-        
+        # 训练每个epoch，每当训练次数达到frequency时保存model
         for self.epoch in range(self.opt.num_epochs):
             self.run_epoch()
             if (self.epoch + 1) % self.opt.save_frequency == 0:
@@ -227,7 +235,8 @@ class Trainer:
 
             if early_phase or late_phase:
                 self.log_time(batch_idx, duration, losses["loss"].cpu().data)
-
+                # ！！！这里的depth_gt没有理解，这里的inputs应该是上面for循环中train loader的参数，但是没找到具体指代
+                # 应该是数据集的inputs之类的，数据集的py文件有该变量相关
                 if "depth_gt" in inputs:
                     self.compute_depth_losses_Hab(inputs, outputs, losses)
 
@@ -241,27 +250,29 @@ class Trainer:
         Pass a minibatch through the network and generate images and losses
         """
         # input images are in [0,1]
+        # 加载数据到gpu
 
         for key, ipt in inputs.items():
             inputs[key] = ipt.to(self.device)
-
+        # 通过depth decoder得到视差图，深度图应该是下面generate_images_pred函数生成
         features = self.models["encoder"](inputs[("color_aug", 0, 0)])
         outputs = self.models["depth"](features)
 
         # Monocular depth cues. It needs to normalize from [0,1] to [-1,-1] to accomodate DPT input.
         # [Optional] You can comment out all outputs["fromMono_disparity"] at test time to speed up
         # The output range of outputs["fromMono_disparity"] is large, approx 0-2000
+        # 此处应该为使用DPT专家网络得到更准确的depth。理论上可能需要修改！！！！
         outputs["fromMono_disparity"], feature_dpt = self.mono_model(inputs[("color_aug", 0, 0)])
 
         # 600 is a stablization term for SSIM loss calculation (statistical distillation loss)
         # Outputs["fromMono"] is in disparity space. +1.0 is to avoid divide by zero.
-        outputs["fromMono_depth"] = 1/(outputs["fromMono_disparity"]+1.0) 
-        
+        outputs["fromMono_depth"] = 1/(outputs["fromMono_disparity"]+1.0)
+
         if self.use_pose_net:
             outputs.update(self.predict_poses(inputs))
-
+        # 生成深度图
         self.generate_images_pred(inputs, outputs)
-
+        # 计算误差loss
         if self.mode == 'train':
             losses = self.compute_losses(inputs, outputs)
         elif self.mode == 'val':
@@ -281,6 +292,7 @@ class Trainer:
             inputs = self.val_iter.__next__()
 
         with torch.no_grad():
+            # 计算loss 的函数process_batch，在上面已经定义
             outputs, losses = self.process_batch(inputs)
             if "depth_gt" in inputs:
                 self.compute_depth_losses_Hab(inputs, outputs, losses)
@@ -292,10 +304,14 @@ class Trainer:
     def compute_losses(self, inputs, outputs, feats=None):
         """
         Combining monodepth2 and distillation losses
+        计算loss的函数，在process_batch中使用过
+        loss_spatial_dist与loss_stat_dist为结构蒸馏的空间损失与统计损失
+        Combining monodepth2 and distillation losses
         """
         losses = {}
         stereo_loss = 0
-
+        # ！！！该for循环关于stereo loss的计算没有看懂，reprojection loss以及identity reprojection loss的问题。
+        # 个人认为此处应该是根据monodepth2的loss计算然后加上知识蒸馏部分的loss
         for scale in self.opt.scales:
             loss = 0
             reprojection_losses = []
@@ -305,11 +321,13 @@ class Trainer:
             disp = outputs[("out", scale)]
             color = inputs[("color", 0, scale)]
             target = inputs[("color", 0, source_scale)]
+            # 此处重点理解！这里的frame ids实际上包括左右一致性和光度一致性的loss，因为如果包括stereo train的话
+            # 那么frame ids中会有's'这个元素，也就是相当于计算了左右一致性的loss。其他的元素如-1，1则是计算光度一致性的loss！
 
             for frame_id in self.opt.frame_ids[1:]:
                 pred = outputs[("color", frame_id, scale)]
                 reprojection_losses.append(self.compute_reprojection_loss(pred, target))
-
+            # 此处是拼接上面的各种reprojection loss
             reprojection_losses = torch.cat(reprojection_losses, 1)
 
             # auto-masking
@@ -342,6 +360,7 @@ class Trainer:
 
             mean_disp = disp.mean(2, True).mean(3, True)
             norm_disp = disp / (mean_disp + 1e-7)
+            # 这里的smooth loss为视差图像的平滑性损失
             smooth_loss = get_smooth_loss(norm_disp, color)
 
             loss += self.opt.disparity_smoothness * smooth_loss / (2 ** scale)
@@ -355,7 +374,7 @@ class Trainer:
         # Deprecated!
         # median alignment from fromMono_depth to out depth
         # ease to use distillation
-        # outputs["fromMono_depth"] = (600.0/(outputs["fromMono_disparity"]+1.0)) 
+        # outputs["fromMono_depth"] = (600.0/(outputs["fromMono_disparity"]+1.0))
         # fac = (torch.median(outputs[('depth', 0, 0)]) / torch.median(outputs["fromMono_depth"])).detach()
         # target_depth = outputs["fromMono_depth"]*fac
 
@@ -376,7 +395,7 @@ class Trainer:
         edge_target =  torch.sqrt(edge_target[:,:,0,:,:]**2 + edge_target[:,:,1,:,:]**2 + 1e-6)
         edge_target = F.normalize(edge_target.view(edge_target.size(0), -1), dim=1, p=2).view(edge_target.size())
         edge_target = edge_target[:,:,5:-5,5:-5]
-        
+
         # thresholding
         bar_target = torch.quantile(edge_target.reshape(edge_target.size(0), -1), self.opt.thre, dim=1)
         bar_target = bar_target[:, None, None, None]
@@ -384,7 +403,7 @@ class Trainer:
         mask_target = self.ABSSIGN(edge_target - bar_target)[pos]
         mask_target = mask_target.detach()
 
-        # convert prediction to magnitude map 
+        # convert prediction to magnitude map
         edge_pred =  torch.sqrt(edge_pred[:,:,0,:,:]**2 + edge_pred[:,:,1,:,:]**2 + 1e-6)
         edge_pred = F.normalize(edge_pred.view(edge_pred.size(0), -1), dim=1, p=2).view(edge_pred.size())
         edge_pred = edge_pred[:,:,5:-5,5:-5]
@@ -398,15 +417,19 @@ class Trainer:
 
         losses["loss/pseudo_depth"] = loss_stat_dist + loss_spatial_dist
         losses["loss"] += self.opt.dist_wt * losses["loss/pseudo_depth"]
-        
+
         #self.cnt += 1
         #print(f'Iter {self.cnt}: {losses["loss"]}')
 
         return losses
-    
+
     def compute_reprojection_loss(self, pred, target):
         """
         Computes reprojection loss between a batch of predicted and target images
+
+        计算reprojection_loss在compute_loss中使用
+        Computes reprojection loss between a batch of predicted and target images
+
         """
         abs_diff = torch.abs(target - pred)
         l1_loss = abs_diff.mean(1, True)
@@ -447,6 +470,7 @@ class Trainer:
     def generate_images_pred(self, inputs, outputs):
         """Generate the warped (reprojected) color images for a minibatch.
         Generated images are saved into the `outputs` dictionary.
+        主要用于重新投影生成彩色图像(wrapping操作)
         """
         for scale in self.opt.scales:
             disp = outputs[("out", scale)]
@@ -548,7 +572,7 @@ class Trainer:
                 inputs = self.val_iter.__next__()
             except StopIteration:
                 break
-
+            # 利用cuda预测出原图的深度图并保存
             with torch.no_grad():
                 inputs[("color_aug", 0, 0)] = inputs[("color_aug", 0, 0)].cuda()
                 features = self.models["encoder"](inputs[("color_aug", 0, 0)]) #
@@ -561,7 +585,7 @@ class Trainer:
                     os.makedirs(store_path)
                     os.makedirs(store_path+'/image')
                     os.makedirs(store_path+'/depth')
-
+                # 数组采样。详细看interpolate函数用法：https://blog.csdn.net/qq_50001789/article/details/120297401
                 img = inputs[('color',0, 0)]
                 img = F.interpolate(img, sz, mode='bilinear', align_corners=True)
                 img = img.cpu().numpy().squeeze()
@@ -671,29 +695,36 @@ class Trainer:
         """Predict poses between input frames for monocular sequences.
         """
         outputs = {}
+        # 这里的num_pose_frames实际上是opt frame ids的长度，理论上来说这个ids的长度只有三种情况
+        # [0,-1,1]依靠前后帧进行训练
+        # [0,'s']依靠双目图像对进行训练
+        # [0,-1,1,'s']依靠前后帧以及双目图像对进行训练
+        # 此处的num_pose_frames为位姿帧的个数，与输入帧的个数相关
         if self.num_pose_frames == 2:
             pose_feats = {f_i: inputs["color_aug", f_i, 0] for f_i in self.opt.frame_ids}
             for f_i in self.opt.frame_ids[1:]:
                 if f_i != "s":
                     # To maintain ordering we always pass frames in temporal order
+                    # 总是保持按时间顺序传递帧
                     if f_i < 0:
                         pose_inputs = [pose_feats[f_i], pose_feats[0]]
                     else:
                         pose_inputs = [pose_feats[0], pose_feats[f_i]]
 
                     pose_inputs = [self.models["pose_encoder"](torch.cat(pose_inputs, 1))]
-
+                    # 通过pose解码器得到输出的 轴角 和 平移
                     axisangle, translation = self.models["pose"](pose_inputs)
                     outputs[("axisangle", 0, f_i)] = axisangle
                     outputs[("translation", 0, f_i)] = translation
 
-                    # Invert the matrix if the frame id is negative
+                    # Invert the matrix if the frame id is negative   帧id为负的话则反转矩阵
                     outputs[("cam_T_cam", 0, f_i)] = transformation_from_parameters(
                         axisangle[:, 0], translation[:, 0], invert=(f_i < 0))
 
         else:
             # Here we input all frames to the pose net (and predict all poses) together
-            
+            # 将所有帧一起输入到姿态网络（并预测所有姿态）
+
             pose_inputs = torch.cat([inputs[("color_aug", i, 0)] for i in self.opt.frame_ids if i != "s"], 1)
             pose_inputs = [self.models["pose_encoder"](pose_inputs)]
 
@@ -770,7 +801,7 @@ class Trainer:
                 writer.add_image(
                     "automask_{}/{}".format(s, j),
                     outputs["identity_selection/{}".format(s)][j][None, ...], self.step)
-    
+
     def log_losses(self, mode, losses):
         """
         write an event to the tensorboard events file
@@ -916,7 +947,7 @@ class Trainer:
 
                 if "depth_gt" in inputs:
                     self.self.compute_depth_errors_VA(inputs, outputs, losses)
-                    
+
                     for var, name in zip(self.metr, self.depth_metric_names):
                         var.update(losses[name], N)
 

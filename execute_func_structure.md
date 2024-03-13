@@ -1,0 +1,22 @@
+- init函数：对专家网络的参数，学生网络的参数，posenet的参数，数据集的使用等等
+- train函数：train and save model
+  - run_epoch函数：进行一个epoch的train和val
+    - process_batch函数：用于每个batch生成图片计算loss
+    - log_time函数：输出logging到终端（运行到一定的batch进行，下同）
+    - log函数：写入事件到文件中
+    - val函数：验证模型
+      - process_batch函数：用于每个batch生成图片计算loss
+        - predict_poses函数：对输入图片进行pose估计
+        - generate_images_pred函数：对图片进行wrap操作生成复原图片
+        - compute_loss函数：用来计算loss。reprojection loss应该是指时间一致性（光度一致性）损失；stereo loss 为左右图像对损失；loss_spatial_dist与loss_stat_dist为结构蒸馏的空间损失与统计损失
+          - compute_reprojection_loss函数：计算rejection loss
+          - compute_ssim_loss函数：计算ssim loss
+          - compute_depth_losses_Hab函数：计算Hab loss
+          - get_smooth_loss函数：用来计算
+  - save_model:
+  - 
+- eval_save函数：保存每个batch的深度预测图
+- eval_save_all函数：保存输入所有的batch深度预测图
+- eval_measure函数：统计结果误差
+  - compute_depth_errors_VA函数：统计VA数据集误差
+  - compute_depth_errors_NYUv2函数：统计NYUv2数据集误差

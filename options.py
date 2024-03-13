@@ -33,6 +33,7 @@ class DistDepthOptions:
                                  default=os.path.join(os.path.expanduser("~"), "tmp"))
 
         # TRAINING options
+        # ！！！！需要修改模型名称，网络参数，数据集
         self.parser.add_argument("--model_name",
                                  type=str,
                                  help="the name of the folder to save the model in",

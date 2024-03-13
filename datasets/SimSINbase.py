@@ -36,7 +36,9 @@ class SimSINBase(data.Dataset):
         self.height = height
         self.width = width
         self.num_scales = num_scales
-        self.interp = Image.ANTIALIAS
+        # self.interp = Image.ANTIALIAS
+        # 此处修改，ANTIALIAS 已经在pillow版本移除，use PIL.Image.LANCZOS or PIL.Image.Resampling.LANCZOS
+        self.interp = Image.Resampling.LANCZOS
 
         self.frame_idxs = frame_idxs
 
@@ -115,10 +117,12 @@ class SimSINBase(data.Dataset):
         """
         inputs = {}
 
+        # ！！！很奇怪这里为什么会将这两个参数随机化。前者是图像才也增强，后者是翻转
         do_color_aug = self.is_train and random.random() > 0.5
         do_flip = self.is_train and random.random() > 0.5
         do_encoding = self.is_train and random.random() > 0.5
 
+        # 此处应该是将文件夹文件名等分开
         line = self.filenames[index].split()
         folder = line[0]
 
@@ -155,6 +159,7 @@ class SimSINBase(data.Dataset):
             inputs[("K", scale)] = torch.from_numpy(K)
             inputs[("inv_K", scale)] = torch.from_numpy(inv_K)
 
+        # 主要是增强彩色图像，do color aug是随机的。如果该变量为1则color_aug会返回一个增强的函数
         if do_color_aug:
             color_aug = transforms.Compose(
                 [

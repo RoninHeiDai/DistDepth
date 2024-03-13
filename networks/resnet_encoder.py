@@ -30,6 +30,7 @@ class ResnetEncoderMatching(nn.Module):
         self.depth_binning = depth_binning
         self.set_missing_to_max = True
 
+        # resnet encoder的每个self.features输出通道，用于构建 depth 网络
         self.num_ch_enc = np.array([64, 64, 128, 256, 512])
         self.num_depth_bins = num_depth_bins
         # we build the cost volume at 1/4 resolution
@@ -58,12 +59,15 @@ class ResnetEncoderMatching(nn.Module):
         if num_layers > 34:
             self.num_ch_enc[1:] *= 4
 
+        # 反向投影器
         self.backprojector = BackprojectDepth(batch_size=self.num_depth_bins,
                                               height=self.matching_height,
                                               width=self.matching_width)
+        # 三维投影器
         self.projector = Project3D(batch_size=self.num_depth_bins,
                                    height=self.matching_height,
                                    width=self.matching_width)
+
 
         self.compute_depth_bins(min_depth_bin, max_depth_bin)
 
